@@ -14,7 +14,8 @@ Turns every project folder into ONE `.rar` file (WinRAR), several folders at onc
 4. Type `YES`. Output is one line per folder: `HH:mm:ss -- ADDED <folder> (4m57s) [n/N]`; a `reason:` line explains anything kept or skipped.
 
 ## What it does, per project folder `X`
-- Builds `X\X.rar` (solid, recovery record, tested, `-df` deletes only what was archived) or ADDS leftovers to an existing `X.rar`.
+- Builds `X\X.rar` (solid, recovery record, tested) or ADDS leftovers to an existing `X.rar`. WinRAR never deletes your files itself: the tool deletes a file only when the tested archive's own list has the same path and size, so a file that could only be read partly stays in the folder.
+- Read errors (e.g. a cloud-only file Drive cannot read) never wait for a key press: retry twice, then ignore that file and continue; the archive must still pass its test.
 - Never newly packs `.gdoc/.gsheet/.gslides/.lnk` (cloud pointers) and, by default, existing `.zip/.rar/.7z...` (they stay as they are).
 - Cleans a file from the folder only when its relative path and size are in the archive's own file list.
 - Duplicate archives `X (N).rar` are extracted into a temp folder, their files placed (missing: moved in; same size: dropped; different: kept as `name (dupN).ext`), then deleted once everything is placed.
