@@ -868,24 +868,34 @@ function Invoke-Archive($s, $rarExe, $cpu, [string[]]$roots, [int]$idx, [int]$co
                         }
                     }
 
-                    # 3. build the archive, or ADD the leftovers to the existing one (u = add new and newer files); -df deletes only what was archived, after -t
+                    # 3. build the archive, or ADD the leftovers to the existing one (u = add new and newer files). WinRAR never deletes originals (no -df): step 4 deletes a file only
+                    #    when the (tested) archive's own list has the same path and size, so a file that WinRAR could only READ PARTLY stays in the folder.
                     $nBefore = -1; $nAfter = -1
                     if ($status) { }     # damaged archive with nothing to rebuild from: reported above
                     elseif ($rarOk -and $left.Count -eq 0) { $status = 'skip' }     # good archive and nothing more to add
                     else {
                         $cmd = if ($rarOk) { 'u' } else { 'a' }
                         if ($rarOk) { $m0 = & $readList $rarExe $rar; if ($m0) { $nBefore = $m0.Count } }
-                        $opts = @($cmd, '-r', '-ep1', '-df', '-s', '-rr', '-t', "-mt$mt", '-dh', '-idq', "-w$work", $level)   # -s solid, -rr recovery record, -t test, -df delete after = the WinRAR boxes ticked
+                        $opts = @($cmd, '-r', '-ep1', '-s', '-rr', '-t', "-mt$mt", '-dh', '-idq', "-w$work", $level)   # -s solid, -rr recovery record, -t test, -df delete after = the WinRAR boxes ticked
                         if (-not $store) { $opts += $skipPacked }
                         foreach ($x in $excludeTypes) { $opts += "-x$x" }
-                        $out = & $rarExe @opts "-x$rar" $rar "$dir\*" 2>&1 | Out-String
+                        # WinRAR asks "[I]gnore, i[G]nore all, [R]etry, [Q]uit" on a read error and WAITS for a key: nobody is there, so the answers are piped in:
+                        # retry twice, then ignore all (the file's readable part is archived; step 4 keeps a file whose size differs). If the input ever ends, Rar aborts instead of hanging.
+                        $answers = "R`nR`n" + ("G`n" * 500)
+                        $out = $answers | & $rarExe @opts "-x$rar" $rar "$dir\*" 2>&1 | Out-String
                         $code = $LASTEXITCODE
                         # Google Drive sometimes cannot open/write a file for a moment (exit 5 / 6): wait and run the same (idempotent) command again, up to 2 more times
                         for ($try = 1; $try -le 2 -and ($code -eq 5 -or $code -eq 6); $try++) {
                             Start-Sleep -Seconds (5 * $try)
                             if (Test-Path -LiteralPath $rar) { $opts[0] = 'u' }
-                            $out = & $rarExe @opts "-x$rar" $rar "$dir\*" 2>&1 | Out-String
+                            $out = $answers | & $rarExe @opts "-x$rar" $rar "$dir\*" 2>&1 | Out-String
                             $code = $LASTEXITCODE
+                        }
+                        # exit 1 = warning, 12 = read error that was ignored: accepted ONLY if the archive passes its full test; the files that had errors stay in the folder
+                        if ($code -eq 1 -or $code -eq 12) {
+                            $wl = @($out -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -Last 2)
+                            & $rarExe t -idq $rar 2>&1 | Out-Null
+                            if ($LASTEXITCODE -eq 0) { $msg = ("WinRAR warning (exit {0}, e.g. a file Google Drive could not read; it is kept in the folder): {1}" -f $code, ($wl -join ' | ')); $code = 0 }
                         }
                         if ($code -eq 0) { $status = if ($rarOk) { 'added' } else { 'done' } }
                         elseif ($code -eq 10) { $status = if ($rarOk) { 'skip' } else { 'empty' } }   # nothing more can be added
@@ -941,7 +951,7 @@ function Invoke-Archive($s, $rarExe, $cpu, [string[]]$roots, [int]$idx, [int]$co
                         $notAdded = @($rest | Where-Object { -not (& $isPacked $_) })
                         $kept     = @($rest | Where-Object { & $isPacked $_ })
                         $parts = @()
-                        if ($already -gt 0)         { $parts += "$already file(s) already in the archive (same name and size): removed from the folder" }
+                        if ($already -gt 0)         { $parts += "$already file(s) confirmed in the archive (same path and size) and removed from the folder" }
                         if ($status -eq 'added')    { $parts += $(if ($nBefore -ge 0 -and $nAfter -ge 0) { "archive entries before $nBefore, after $nAfter" } else { 'archive file list unavailable' }) }
                         if ($notAdded.Count -gt 0) {
                             if ($map) {
@@ -1061,7 +1071,7 @@ if ($cfg) { Write-Host " (answers of the last run loaded from RUN_settings.json;
 # A newer version is installed automatically (no question). The zip must match the SHA-256 in latest.txt, or it is discarded.
 # Only CLEANUP.ps1 is replaced (RUN.bat is running right now, so a newer one is saved as RUN.bat.new). The old CLEANUP.ps1 is MOVED into
 # "old version\<version>\" next to the script; only the 3 newest folders there are kept. Nothing outside this script folder is touched.
-$ScriptVersion = '1.8.0'   # semantic version MAJOR.MINOR.PATCH: PATCH = fix, MINOR = new feature, MAJOR = changed behaviour; keep latest.txt in step
+$ScriptVersion = '1.9.0'   # semantic version MAJOR.MINOR.PATCH: PATCH = fix, MINOR = new feature, MAJOR = changed behaviour; keep latest.txt in step
 $updateUrl = if ($cfg -and $cfg.UpdateUrl) { [string]$cfg.UpdateUrl } else { 'https://drive.google.com/uc?export=download&id=1WQk3C1l9WXLhQfSzl6jvCOBKhU6O5awf' }
 if ($env:RAR_UPDATED_FROM) { Write-Host (" Updated: v{0} -> v{1}" -f $env:RAR_UPDATED_FROM, $ScriptVersion) -ForegroundColor Green; Remove-Item Env:\RAR_UPDATED_FROM -ErrorAction SilentlyContinue; $justUpdated = $true } else { $justUpdated = $false }
 $upStatus = ''
